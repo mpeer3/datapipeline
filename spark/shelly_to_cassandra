@@ -1,0 +1,23 @@
+import org.apache.spark.sql.types.{StringType, DoubleType,IntegerType, StructType,LongType}
+import spark.implicits._
+
+spark.conf.set("spark.cassandra.connection.host","cas1.mipemnet.com")
+val shellyData=new StructType()
+ .add("apower",DoubleType)
+ .add("voltage",DoubleType)
+ .add("aenergy",new StructType()
+    .add("minute_ts",LongType)
+
+)
+val shellySchema = new StructType()
+ .add("mqtt_topic",StringType)
+ .add("data",shellyData)
+
+val kafkaDF = spark.readStream.format("kafka").option("kafka.bootstrap.servers","kfk1.mipemnet.com:9092").option("subscribe","shelly").option("startingOffsets","latest").load()
+val parsedDF = kafkaDF.selectExpr("CAST(value AS STRING)")
+ .select(from_json(col("value"),shellySchema).alias("dat"))
+ .select(col("dat.mqtt_topic") as ("topic"),col("dat.data.apower") as ("watts"),
+ col("dat.data.voltage") as "voltage",col("dat.data.aenergy.minute_ts") as ("timestamp"))
+val procDF=parsedDF.filter(col("dat.data.apower").isNotNull)
+//val out=procDF.withColumn("time",timestamp_seconds(col("timestamp"))).writeStream.format("console").option("truncate","false").start()
+procDF.withColumn("time",timestamp_seconds(col("timestamp"))).withColumn("id",expr("uuid()")).writeStream.format("org.apache.spark.sql.cassandra").option("checkpointLocation","/tmp/checkpoint").option("table","shelly").option("keyspace","shellydata").outputMode("append").start().awaitTermination()
